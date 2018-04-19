@@ -44,6 +44,7 @@ int RR_push(RoundRobin* r, void* e){
 			//printf("rr fd\n");
 			r->data[r->last].fd = *((int*)e);
 			break;
+		default:break;
 	}
 
 	r->last = (r->last + 1) % r->size;

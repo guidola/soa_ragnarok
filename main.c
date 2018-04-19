@@ -1,6 +1,9 @@
-#include <stdio.h>
+#include "shell/commands.h"
 
-int main() {
-    fprintf(stdout, "hello world");
+int main(int argc, char** argv) {
+
+    assertArgs(argc, argv);
+    executeCommand(argv);
+
     return 0;
 }

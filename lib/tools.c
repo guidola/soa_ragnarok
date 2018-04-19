@@ -1,5 +1,4 @@
-#include "../common/typesNdConstants.h"
-#include <math.h>
+#include "tools.h"
 
 
 void* nothing(void){
@@ -28,7 +27,7 @@ pthread_t launchThread(fn_ptr func, void* param){
 
 	if(0 != pthread_create(&pth, NULL, func, param)){
 		perror("Thread creation error");
-		return -1;
+		return (pthread_t) -1;
 	}
 
 	return pth;
@@ -238,7 +237,7 @@ char* itoa(int n, char* s)
 		s[i++] = '-';
 	s[i] = '\0';
 	reverse(s);
-
+    return s;
 }
 
 /*

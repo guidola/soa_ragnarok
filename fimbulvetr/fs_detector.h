@@ -1,8 +1,0 @@
-//
-// Created by GDL on 11/4/18.
-//
-
-#ifndef SOA_RAGNAROK_FS_DETECTOR_H
-#define SOA_RAGNAROK_FS_DETECTOR_H
-
-#endif //SOA_RAGNAROK_FS_DETECTOR_H

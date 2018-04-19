@@ -34,12 +34,12 @@
  * It is the fourth argument of the semctl function, and it is
  * optional, depending upon the operation requested.
  */
-union semun
+/*union semun
 {
 	int val;
 	struct semid_ds * buf;
 	unsigned short  * array;
-};
+};*/
 
 /**
  * Struct used to indicate to a semaphore which operation is 

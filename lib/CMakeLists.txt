@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.8)
-project(library)
+project(lib)
 
 set(
         LIBRARY_SOURCE_FILES
@@ -14,6 +14,6 @@ set(
         orderedBuffer.c
         orderedBuffer.h
         roundRobin.c
-        roundRobin.h)
+        roundRobin.h exitCodes.h stringUtils.c stringUtils.h types.h)
 
 add_library(${PROJECT_NAME} ${LIBRARY_SOURCE_FILES})
