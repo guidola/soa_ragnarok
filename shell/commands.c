@@ -4,12 +4,19 @@
 
 #include "commands.h"
 
-uint8_t __isValidCommand(char* cmd) {
-    if(strcmp(cmd, "-info") == 0){
+uint8_t __isValidCommand(char* cmd, int argc) {
+    if(strcmp(cmd, COMMAND_INFO) == 0){
         return VALID;
 
+    } else if(strcmp(cmd, COMMAND_SEARCH) == 0){
+        if(argc < 4){
+            fprintf(stderr, "Missing target. USAGE: %s -search <volume> <target>", cmd);
+            return INVALID;
+        }
+        return VALID;
     }// add as much else ifs as commands we got
 
+    fprintf(stderr, "Invalid command. USAGE: %s {-info|-search} <volume> [<target>]\n", cmd);
     return INVALID;
 }
 
@@ -30,13 +37,11 @@ void __checkForVolumeAvailability(char* volume) {
 void assertArgs(int argc, char** argv) {
 
     if(argc < 3){
-        fprintf(stderr, "Invalid number of parameters. USAGE: %s [-info] <volume>\n", argv[0]);
+        fprintf(stderr, "Invalid number of parameters. USAGE: %s {-info|-search} <volume> [<target>]\n", argv[0]);
         exit(FAILED_TO_ASSERT_PARAMS);
 
-    } else if(!__isValidCommand(argv[1])) {
-        fprintf(stderr, "Invalid command. USAGE: %s [-info] <volume>\n", argv[0]);
+    } else if(!__isValidCommand(argv[1], argc)) {
         exit(INVALID_COMMAND);
-
     }
 
     __checkForVolumeAvailability(argv[2]);
@@ -45,9 +50,11 @@ void assertArgs(int argc, char** argv) {
 
 void executeCommand(char** parameters) {
 
-    if(strcmp(parameters[1], "-info") == 0) {
+    if(strcmp(parameters[1], COMMAND_INFO) == 0) {
         showFileSystemInfo(parameters[2]);
 
+    } else if(strcmp(parameters[1], COMMAND_SEARCH) == 0) {
+        searchForFileInRootDir(parameters[2], parameters[3]);
     }// add as much else ifs as rutines we can execute
 
 }

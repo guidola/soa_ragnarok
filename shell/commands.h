@@ -15,6 +15,9 @@
 #define VALID 0x01
 #define INVALID 0x00
 
+#define COMMAND_INFO    "-info"
+#define COMMAND_SEARCH  "-search"
+
 
 void assertArgs(int, char**);
 void executeCommand(char**);
