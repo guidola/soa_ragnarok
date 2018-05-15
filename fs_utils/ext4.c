@@ -5,10 +5,13 @@
 #include "ext4.h"
 
 
-void seekToSuperBlock(int vol_fd) {
-    lseek(vol_fd, SUPERBLOCK_START, SEEK_SET);
 
-}
+typedef struct {
+    uint64_t inodeTableLocation;
+    uint32_t inodeSize;
+}EXT4_Globals;
+
+EXT4_Globals globals;
 
 void seekToSuperBlockField(int vol_fd, off_t offset) {
     lseek(vol_fd, SUPERBLOCK_START + offset, SEEK_SET);
@@ -19,6 +22,32 @@ void readSuperBlockField(int vol_fd, void* destination, size_t size, off_t offse
     read(vol_fd, destination, size);
 }
 
+void seekToGroupDescriptorField(int vol_fd, off_t offset) {
+    lseek(vol_fd, GROUP_DESCRIPTOR_START + offset, SEEK_SET);
+}
+
+void readGroupDescriptorField(int vol_fd, void* destination, size_t destination_size, off_t  offset){
+    seekToGroupDescriptorField(vol_fd, offset);
+    read(vol_fd, destination, destination_size);
+}
+
+void seekToInodeField(int vol_fd, uint32_t inode_number, off_t offset) {
+    lseek(vol_fd, globals.inodeTableLocation + (inode_number - 1) * globals.inodeSize + offset , SEEK_SET);
+}
+
+void readInodeField(int vol_fd, uint32_t inode_number, void* destination, size_t destination_size, off_t  offset){
+    seekToInodeField(vol_fd, inode_number, offset);
+    read(vol_fd, destination, destination_size);
+}
+
+void EXT4_init(int vol_fd){
+
+    readSuperBlockField(vol_fd, &(globals.inodeSize), sizeof(globals.inodeSize), INODE_SIZE);
+
+    readGroupDescriptorField(vol_fd, &(globals.inodeTableLocation), sizeof(uint32_t), INODE_TABLE_LOC_HI);
+    globals.inodeTableLocation = globals.inodeTableLocation << UINT64_NIBBLE_OFFSET;
+    readGroupDescriptorField(vol_fd, &(globals.inodeTableLocation), sizeof(uint32_t), INODE_TABLE_LOC_LO);
+}
 
 bool isExt(int vol_fd) {
 
@@ -81,7 +110,71 @@ EXT4Info getEXT4Info(int vol_fd) {
     return info;
 }
 
+void traverseExtentTree(int vol_fd, off_t next_jump, ExtentGroup* blocks) {
+
+    // seek to new offset
+    lseek(vol_fd, next_jump + ENTRY_COUNT, SEEK_SET);
+
+    // read header
+    ExtentHeader header;
+    read(vol_fd, &(header.entryCount), sizeof(header.entryCount));
+    lseek(vol_fd, DEPTH_OFFSET_FROM_ENTRY_COUNT, SEEK_CUR);
+    read(vol_fd, &(header.depth), sizeof(header.depth));
+    lseek(vol_fd, EXTENT_HEADER_FINAL_FIELDS, SEEK_CUR);
+
+    if(header.depth == 0){
+        // if data process the blocks and add them to the list
+        for(int i = 0; i < header.entryCount; i++){
+            DataExtent extent;
+            read(vol_fd, &(extent.firstBlockOfRange), sizeof(extent.firstBlockOfRange));
+            read(vol_fd, &(extent.lengthOfRange), sizeof(extent.lengthOfRange));
+            read(vol_fd, &(extent.firstBlockAddress), sizeof(uint16_t));
+            extent.firstBlockAddress = extent.firstBlockAddress << UINT64_NIBBLE_OFFSET;
+            read(vol_fd, &(extent.firstBlockAddress), sizeof(uint32_t));
+
+            blocks->extents[blocks->count] = extent;
+            (blocks->count)++;
+        }
+    } else {
+        // if index recursively call this function with the new address
+        for(int i = 1; i <= header.entryCount; i++){
+            IndexExtent extent;
+            read(vol_fd, &(extent.firstBlockOfBranch), sizeof(extent.firstBlockOfBranch));
+            uint32_t nn_lo;
+            read(vol_fd, &(nn_lo), sizeof(nn_lo));
+            read(vol_fd, &(extent.nextNode), sizeof(extent.nextNode));
+            extent.nextNode = extent.nextNode << UINT64_NIBBLE_OFFSET + nn_lo;
+            traverseExtentTree(vol_fd, extent.nextNode, blocks);
+            lseek(vol_fd, next_jump + EXTENT_HEADER_LEN + i * EXTENT_ENTRY_LEN, SEEK_SET);
+        }
+    }
+
+
+}
+
+Inode getInodeInfo(int vol_fd, uint32_t inode_number) {
+
+    Inode inode;
+
+    readInodeField(vol_fd, inode_number, &(inode.file_mode), sizeof(inode.file_mode), FILE_MODE);
+    readInodeField(vol_fd, inode_number, &(inode.size), sizeof(uint32_t), SIZE_HI);
+    inode.size = inode.size << UINT64_NIBBLE_OFFSET;
+    readInodeField(vol_fd, inode_number, &(inode.size), sizeof(uint32_t), SIZE_LO);
+    readInodeField(vol_fd, inode_number, &(inode.flags), sizeof(inode.flags), INODE_FLAGS);
+    readInodeField(vol_fd, inode_number, &(inode.ctime), sizeof(inode.ctime), CREATION_TIME);
+    traverseExtentTree(vol_fd, globals.inodeTableLocation + (inode_number - 1) * globals.inodeSize + EXTENT_TREE_ROOT, &(inode.dataBlocks));
+
+    return inode;
+}
+
+void searchInDirectory(){
+
+}
+
 EXT4_FileMetadata EXT4_SearchInRoot(int vol_fd, char* target) {
 
+    EXT4_FileMetadata metadata;
 
+
+    return metadata;
 }

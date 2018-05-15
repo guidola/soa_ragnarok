@@ -78,11 +78,16 @@ void showFileSystemInfo(char* volume) {
 
 }
 
-void showResultsEXT() {
+void showResultsFAT(int vol_fd, char* target){
+    //FAT32_SearchInRoot(vol_fd, target);
+}
+
+void showResultsEXT(int vol_fd, char* target) {
 
     EXT4_FileMetadata fm = EXT4_SearchInRoot(vol_fd, target);;
 
-    fprintf(stdout, "File Found! Size: %d bytes. Created on %s.", fm.size, fm.cdate);
+    time_t crtime = (time_t)(fm.ctime);
+    fprintf(stdout, "File Found! Size: %d bytes. Created on %s", fm.size, ctime(&crtime));
 }
 
 void searchForFileInRootDir(char* volume, char* target) {
@@ -98,8 +103,9 @@ void searchForFileInRootDir(char* volume, char* target) {
 
             return;
         case EXT4:
+            EXT4_init(vol_fd);
             showResultsEXT(vol_fd, target);
-            return;FAT32_SearchInRoot(vol_fd, target);
+            return;
     }
 
 }
