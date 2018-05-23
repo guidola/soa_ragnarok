@@ -1,18 +1,10 @@
 //
 // Created by GDL on 7/5/18.
 //
-#include <fcntl.h>
 #include "common.h"
-#include "../lib/exitCodes.h"
-#include <stdlib.h>
-#include <stdio.h>
-#include "../fs_utils/ext4.h"
-#include "../fs_utils/fat32.h"
-
-
 
 int initVolume(char* path) {
-    int fd = open(path, O_RDONLY);
+    int fd = open(path, O_RDWR);
     if(fd == -1){
         fprintf(stderr, "Can't open file descriptor to provided volume at path '%s'\n", path);
         exit(CANNOT_OPEN_FD_TO_VOLUME);

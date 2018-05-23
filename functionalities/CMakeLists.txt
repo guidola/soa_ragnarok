@@ -3,7 +3,7 @@ project(functionalities)
 
 set(
         FUNCT_SOURCE_FILES
-        fimbulvetr.c
-        fimbulvetr.h)
+        functionalities.c
+        functionalities.h)
 
 add_library(${PROJECT_NAME} ${FUNCT_SOURCE_FILES})

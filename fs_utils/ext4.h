@@ -10,6 +10,10 @@
 #include <unistd.h>
 #include <stdbool.h>
 #include <math.h>
+#include <stdlib.h>
+#include <strings.h>
+#include <time.h>
+#include "../lib/exitCodes.h"
 
 /** LAYOUT MAIN POSITIONS **/
 #define SUPERBLOCK_START        1024
@@ -59,8 +63,7 @@ typedef struct {
 
 
 /** OTHER VALUES **/
-# define MAGIC_NUMBER 0xEF53
-
+#define MAGIC_NUMBER 0xEF53
 
 /** EXT4 INFO STRUCTURES **/
 typedef struct {
@@ -99,7 +102,6 @@ typedef struct {
 
 } EXT4Info;
 
-
 /** EXTENT HEADER OFFSETS **/
 #define ENTRY_COUNT                     0x02
 #define DEPTH_OFFSET_FROM_ENTRY_COUNT   0x02
@@ -135,11 +137,24 @@ typedef struct {
     uint64_t firstBlockAddress;
 }DataExtent;
 
-#define MAX_RANGES 1000
+#define MAX_RANGES 10000
 typedef struct {
     DataExtent extents[MAX_RANGES];
     int count;
+    uint16_t lastBlockUsedSize;
 }ExtentGroup;
+
+
+typedef uint8_t* Block;
+
+
+/** INODE FILE TYPE CODES **/
+#define I_FILE         0x8000
+#define I_DIRECTORY    0x4000
+
+/** DIRECTORY LIST FILE TYPE CODES **/
+#define DE_FILE         0x01
+#define DE_DIRECTORY    0x02
 
 /** INODE field offsets **/
 
@@ -150,6 +165,15 @@ typedef struct {
 #define SIZE_HI             0x6C
 #define CREATION_TIME       0x90
 
+/** INODE flags masks & values **/
+#define IMMUTABLE_FLAG_MASK 0xFFFFFFEF
+#define BYTE_NIBBLE_OFFSET  0x04
+#define SET_IMMUTABLE       0x01
+#define UNSET_IMMUTABLE     0x00
+
+#define INODE_ZERO              0x00
+#define ROOT_DIR_INODE          0x02
+
 typedef struct {
 
     uint16_t file_mode;
@@ -159,16 +183,40 @@ typedef struct {
     uint32_t ctime;
 }Inode;
 
+#define EXT4_MAX_FILENAME_LEN   255
+#define HIDDEN_FILE_PREFIX      '.'
+
 typedef struct {
+    char filename[EXT4_MAX_FILENAME_LEN];
     uint64_t size;
     uint32_t ctime;
 }EXT4_FileMetadata;
 
-void seekToSuperBlockField(int vol_fd, off_t offset);
+/** DIRECTORY ENTRY **/
+
+typedef struct {
+    uint32_t target_inode;
+    uint16_t entryLength;
+    uint8_t filenameLength;
+    uint8_t fileType;
+    char filename[EXT4_MAX_FILENAME_LEN];
+}DirectoryEntry;
+
+typedef struct {
+    uint32_t inode;
+    EXT4_FileMetadata metadata;
+    ExtentGroup content;
+}EXT4_File;
+
+
 bool isExt(int vol_fd);
 uint8_t getExtVersion(int vol_fd);
 EXT4Info getEXT4Info(int vol_fd);
-EXT4_FileMetadata EXT4_SearchInRoot(int vol_fd, char* target);
+EXT4_File* EXT4_SearchInRoot(int vol_fd, char* target);
+EXT4_File* EXT4_SearchInVolume(int vol_fd, char* target);
 void EXT4_init(int vol_fd);
+void catEXT4File(int vol_fd, ExtentGroup eg);
+bool EXT4_SetRonlyFlag(int vol_fd, char* target, bool value);
+bool EXT4_SetCreationDate(int vol_fd, char* target, char* value);
 
 #endif //SOA_RAGNAROK_EXT4_H

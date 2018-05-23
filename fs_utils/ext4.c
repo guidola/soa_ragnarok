@@ -5,10 +5,10 @@
 #include "ext4.h"
 
 
-
 typedef struct {
     uint64_t inodeTableLocation;
     uint32_t inodeSize;
+    double blockSize;
 }EXT4_Globals;
 
 EXT4_Globals globals;
@@ -32,7 +32,8 @@ void readGroupDescriptorField(int vol_fd, void* destination, size_t destination_
 }
 
 void seekToInodeField(int vol_fd, uint32_t inode_number, off_t offset) {
-    lseek(vol_fd, globals.inodeTableLocation + (inode_number - 1) * globals.inodeSize + offset , SEEK_SET);
+    uint64_t itl = globals.inodeTableLocation;
+    lseek(vol_fd, globals.inodeTableLocation + ((inode_number - 1)) * globals.inodeSize + offset , SEEK_SET);
 }
 
 void readInodeField(int vol_fd, uint32_t inode_number, void* destination, size_t destination_size, off_t  offset){
@@ -43,10 +44,15 @@ void readInodeField(int vol_fd, uint32_t inode_number, void* destination, size_t
 void EXT4_init(int vol_fd){
 
     readSuperBlockField(vol_fd, &(globals.inodeSize), sizeof(globals.inodeSize), INODE_SIZE);
+    uint16_t logBlockSize;
+    readSuperBlockField(vol_fd, &(logBlockSize), sizeof(logBlockSize), LOG_BLOCK_SIZE);
+    globals.blockSize = pow(2, 10 + logBlockSize);
 
     readGroupDescriptorField(vol_fd, &(globals.inodeTableLocation), sizeof(uint32_t), INODE_TABLE_LOC_HI);
     globals.inodeTableLocation = globals.inodeTableLocation << UINT64_NIBBLE_OFFSET;
     readGroupDescriptorField(vol_fd, &(globals.inodeTableLocation), sizeof(uint32_t), INODE_TABLE_LOC_LO);
+    globals.inodeTableLocation = globals.inodeTableLocation * (uint64_t)globals.blockSize;
+
 }
 
 bool isExt(int vol_fd) {
@@ -143,8 +149,9 @@ void traverseExtentTree(int vol_fd, off_t next_jump, ExtentGroup* blocks) {
             uint32_t nn_lo;
             read(vol_fd, &(nn_lo), sizeof(nn_lo));
             read(vol_fd, &(extent.nextNode), sizeof(extent.nextNode));
-            extent.nextNode = extent.nextNode << UINT64_NIBBLE_OFFSET + nn_lo;
-            traverseExtentTree(vol_fd, extent.nextNode, blocks);
+            extent.nextNode = (extent.nextNode << UINT64_NIBBLE_OFFSET) + nn_lo;
+
+            traverseExtentTree(vol_fd, extent.nextNode * (uint64_t)globals.blockSize, blocks);
             lseek(vol_fd, next_jump + EXTENT_HEADER_LEN + i * EXTENT_ENTRY_LEN, SEEK_SET);
         }
     }
@@ -162,19 +169,193 @@ Inode getInodeInfo(int vol_fd, uint32_t inode_number) {
     readInodeField(vol_fd, inode_number, &(inode.size), sizeof(uint32_t), SIZE_LO);
     readInodeField(vol_fd, inode_number, &(inode.flags), sizeof(inode.flags), INODE_FLAGS);
     readInodeField(vol_fd, inode_number, &(inode.ctime), sizeof(inode.ctime), CREATION_TIME);
+    inode.dataBlocks.count = 0;
     traverseExtentTree(vol_fd, globals.inodeTableLocation + (inode_number - 1) * globals.inodeSize + EXTENT_TREE_ROOT, &(inode.dataBlocks));
+    inode.dataBlocks.lastBlockUsedSize = (uint16_t) (inode.size % (uint64_t)globals.blockSize);
 
     return inode;
 }
 
-void searchInDirectory(){
+void readBlock(int vol_fd, uint64_t base_block, uint16_t blockInRange, uint8_t* destination) {
+    lseek(vol_fd, ((uint64_t)globals.blockSize * (base_block + blockInRange)), SEEK_SET);
+    read(vol_fd, destination, (size_t)globals.blockSize);
+    int i = 0;
+}
+
+EXT4_File* searchInDirectory(int vol_fd, uint32_t inode_number, char* target){
+
+    Inode directory = getInodeInfo(vol_fd, inode_number);
+    Block block = (Block)malloc((size_t) (sizeof(uint8_t) * globals.blockSize));
+
+    for(int i = 0; i < directory.dataBlocks.count; i++) {
+        for(uint16_t j = 0; j < directory.dataBlocks.extents[i].lengthOfRange; j++){
+
+
+            readBlock(vol_fd, directory.dataBlocks.extents[i].firstBlockAddress, j, block);
+            int actualPos = 0, initialPos = 0;
+
+            while(initialPos < globals.blockSize){
+
+                DirectoryEntry entry;
+                actualPos = initialPos;
+                bcopy(&(block[actualPos]), &(entry.target_inode), sizeof(entry.target_inode));
+                if(entry.target_inode == INODE_ZERO){
+                    break;
+                }
+                actualPos += sizeof(entry.target_inode);
+                bcopy(&(block[actualPos]), &(entry.entryLength), sizeof(entry.entryLength));
+                actualPos += sizeof(entry.entryLength);
+                bcopy(&(block[actualPos]), &(entry.filenameLength), sizeof(entry.filenameLength));
+                actualPos += sizeof(entry.filenameLength);
+                bcopy(&(block[actualPos]), &(entry.fileType), sizeof(entry.fileType));
+                actualPos += sizeof(entry.fileType);
+                bcopy(&(block[actualPos]), entry.filename, sizeof(char) * entry.filenameLength);
+                entry.filename[entry.filenameLength] = '\0';
+                initialPos += entry.entryLength;
+
+                fprintf(stdout, "entry found: '%s' - len: %d - ", entry.filename, entry.filenameLength);
+                fprintf(stdout, "filetype: %d - len_entry: \n", entry.fileType);
+
+                if(entry.fileType == DE_FILE && entry.filename[0] != HIDDEN_FILE_PREFIX && strcmp(entry.filename, target) == 0){
+                    EXT4_File* file = (EXT4_File*)malloc(sizeof(EXT4_File));
+                    bcopy(entry.filename, file->metadata.filename, EXT4_MAX_FILENAME_LEN);
+                    Inode inode = getInodeInfo(vol_fd, entry.target_inode);
+                    file->metadata.ctime = inode.ctime;
+                    file->metadata.size = inode.size;
+                    file->content = inode.dataBlocks;
+                    return file;
+                }
+
+            }
+        }
+    }
+    free(block);
+    return NULL;
+}
+
+EXT4_File* searchRecursivelyInDirectory(int vol_fd, uint32_t inode_number, char* target){
+
+    Inode directory = getInodeInfo(vol_fd, inode_number);
+    Block block = (Block)malloc((size_t) (sizeof(uint8_t) * globals.blockSize));
+
+    for(int i = 0; i < directory.dataBlocks.count; i++) {
+        for(uint16_t j = 0; j < directory.dataBlocks.extents[i].lengthOfRange; j++){
+
+
+            readBlock(vol_fd, directory.dataBlocks.extents[i].firstBlockAddress, j, block);
+            int actualPos = 0, initialPos = 0;
+
+            while(initialPos < globals.blockSize){
+
+                DirectoryEntry entry;
+                actualPos = initialPos;
+                bcopy(&(block[actualPos]), &(entry.target_inode), sizeof(entry.target_inode));
+                if(entry.target_inode == INODE_ZERO){
+                    break;
+                }
+                actualPos += sizeof(entry.target_inode);
+                bcopy(&(block[actualPos]), &(entry.entryLength), sizeof(entry.entryLength));
+                actualPos += sizeof(entry.entryLength);
+                bcopy(&(block[actualPos]), &(entry.filenameLength), sizeof(entry.filenameLength));
+                actualPos += sizeof(entry.filenameLength);
+                bcopy(&(block[actualPos]), &(entry.fileType), sizeof(entry.fileType));
+                actualPos += sizeof(entry.fileType);
+                bcopy(&(block[actualPos]), entry.filename, sizeof(char) * entry.filenameLength);
+                entry.filename[entry.filenameLength] = '\0';
+                initialPos += entry.entryLength;
+
+                fprintf(stdout, "entry found: '%s' - len: %d - ", entry.filename, entry.filenameLength);
+                fprintf(stdout, "filetype: %d - len_entry: \n", entry.fileType);
+
+                if(entry.fileType == DE_FILE && entry.filename[0] != HIDDEN_FILE_PREFIX && strcmp(entry.filename, target) == 0){
+                    EXT4_File* file = (EXT4_File*)malloc(sizeof(EXT4_File));
+                    bcopy(entry.filename, file->metadata.filename, EXT4_MAX_FILENAME_LEN);
+                    Inode inode = getInodeInfo(vol_fd, entry.target_inode);
+                    file->metadata.ctime = inode.ctime;
+                    file->metadata.size = inode.size;
+                    file->content = inode.dataBlocks;
+                    file->inode = entry.target_inode;
+                    return file;
+                } else if(entry.fileType == DE_DIRECTORY && entry.filename[0] != HIDDEN_FILE_PREFIX ) {
+                    EXT4_File* file = searchRecursivelyInDirectory(vol_fd, entry.target_inode, target);
+                    if(file != NULL){
+                        return file;
+                    }
+                }
+
+            }
+        }
+    }
+    free(block);
+    return NULL;
+}
+
+EXT4_File* EXT4_SearchInRoot(int vol_fd, char* target) {
+    return searchInDirectory(vol_fd, ROOT_DIR_INODE, target);
+}
+
+EXT4_File* EXT4_SearchInVolume(int vol_fd, char* target) {
+    return searchRecursivelyInDirectory(vol_fd, ROOT_DIR_INODE, target);
+}
+
+void catEXT4File(int vol_fd, ExtentGroup eg) {
+
+    Block block = (Block)malloc((size_t) (sizeof(uint8_t) * globals.blockSize));
+
+    for(int i = 0; i < eg.count; i++) {
+        for(uint16_t j = 0; j < eg.extents[i].lengthOfRange; j++){
+
+            readBlock(vol_fd, eg.extents[i].firstBlockAddress, j, block);
+            if(block[0] == '\0') return;
+            if(i == eg.count - 1 && j == eg.extents[i].lengthOfRange - 1){
+                write(1, block, (size_t) (sizeof(uint8_t) * eg.lastBlockUsedSize));
+            } else {
+                write(1, block, (size_t) (sizeof(uint8_t) * globals.blockSize));
+            }
+
+        }
+    }
+
+    write(1, "\n\n", 2);
+    free(block);
 
 }
 
-EXT4_FileMetadata EXT4_SearchInRoot(int vol_fd, char* target) {
+void writeToInodeField(int vol_fd, uint32_t inode_number, void* value, size_t value_size, off_t  offset){
+        seekToInodeField(vol_fd, inode_number, offset);
+        write(vol_fd, value, value_size);
+}
 
-    EXT4_FileMetadata metadata;
+bool EXT4_SetRonlyFlag(int vol_fd, char* target, bool value) {
 
+    EXT4_File* f = EXT4_SearchInVolume(vol_fd, target);
+    if(f == NULL){
+        return false;
+    }
 
-    return metadata;
+    uint32_t i_mode;
+    readInodeField(vol_fd, f->inode, &i_mode, sizeof(i_mode), INODE_FLAGS);
+    i_mode = (i_mode & IMMUTABLE_FLAG_MASK) | ((value ? SET_IMMUTABLE : UNSET_IMMUTABLE) << BYTE_NIBBLE_OFFSET);
+    writeToInodeField(vol_fd, f->inode, &i_mode, sizeof(i_mode), INODE_FLAGS);
+    readInodeField(vol_fd, f->inode, &i_mode, sizeof(i_mode), INODE_FLAGS);
+    return true;
+
+}
+
+bool EXT4_SetCreationDate(int vol_fd, char* target, char* value) {
+
+    EXT4_File* f = EXT4_SearchInVolume(vol_fd, target);
+    if(f == NULL){
+        return false;
+    }
+
+    struct tm tm_crDate;
+    char* ret = strptime(value, "%d%m%Y", &tm_crDate);
+
+    if(ret == NULL || *ret != '\0') exit(INVALID_DATE_FORMAT);
+
+    uint32_t crDate = (uint32_t) mktime(&tm_crDate);
+    writeToInodeField(vol_fd, f->inode, &crDate, sizeof(crDate), CREATION_TIME);
+    return true;
+
 }
