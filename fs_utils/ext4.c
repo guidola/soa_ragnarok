@@ -6,9 +6,10 @@
 
 
 typedef struct {
-    uint64_t inodeTableLocation;
+    uint32_t inodesPerGroup;
     uint32_t inodeSize;
     double blockSize;
+    bool is64;
 }EXT4_Globals;
 
 EXT4_Globals globals;
@@ -22,18 +23,34 @@ void readSuperBlockField(int vol_fd, void* destination, size_t size, off_t offse
     read(vol_fd, destination, size);
 }
 
-void seekToGroupDescriptorField(int vol_fd, off_t offset) {
-    lseek(vol_fd, GROUP_DESCRIPTOR_START + offset, SEEK_SET);
+void seekToGroupDescriptorField(int vol_fd, int group_number, off_t offset) {
+    lseek(vol_fd, (uint64_t)((globals.blockSize == 1024 ? GROUP_DESCRIPTOR_START : globals.blockSize) + (globals.is64 ? 64 : 32) * group_number + offset), SEEK_SET);
 }
 
-void readGroupDescriptorField(int vol_fd, void* destination, size_t destination_size, off_t  offset){
-    seekToGroupDescriptorField(vol_fd, offset);
+void readGroupDescriptorField(int vol_fd, int group_number, void* destination, size_t destination_size, off_t  offset){
+    seekToGroupDescriptorField(vol_fd, group_number, offset);
     read(vol_fd, destination, destination_size);
 }
 
+uint64_t getInodeTableLocationForGroup(int vol_fd, uint8_t group_number) {
+
+
+    uint64_t inodeTableLocation = 0;
+
+    if(globals.is64){
+        readGroupDescriptorField(vol_fd, group_number, &(inodeTableLocation), sizeof(uint32_t), INODE_TABLE_LOC_HI);
+        inodeTableLocation = inodeTableLocation << UINT64_NIBBLE_OFFSET;
+    }
+
+    readGroupDescriptorField(vol_fd, group_number, &(inodeTableLocation), sizeof(uint32_t), INODE_TABLE_LOC_LO);
+    inodeTableLocation = inodeTableLocation * (uint64_t)globals.blockSize;
+    return inodeTableLocation;
+}
+
 void seekToInodeField(int vol_fd, uint32_t inode_number, off_t offset) {
-    uint64_t itl = globals.inodeTableLocation;
-    lseek(vol_fd, globals.inodeTableLocation + ((inode_number - 1)) * globals.inodeSize + offset , SEEK_SET);
+    uint64_t itl = getInodeTableLocationForGroup(vol_fd, (uint8_t)((inode_number - 1 ) / globals.inodesPerGroup));
+    uint64_t  pos = itl + ((inode_number - 1) % globals.inodesPerGroup) * globals.inodeSize + offset;
+    lseek(vol_fd, itl + ((inode_number - 1) % globals.inodesPerGroup) * globals.inodeSize + offset , SEEK_SET);
 }
 
 void readInodeField(int vol_fd, uint32_t inode_number, void* destination, size_t destination_size, off_t  offset){
@@ -47,11 +64,11 @@ void EXT4_init(int vol_fd){
     uint16_t logBlockSize;
     readSuperBlockField(vol_fd, &(logBlockSize), sizeof(logBlockSize), LOG_BLOCK_SIZE);
     globals.blockSize = pow(2, 10 + logBlockSize);
+    readSuperBlockField(vol_fd, &(globals.inodesPerGroup), sizeof(globals.inodesPerGroup), INODES_PER_GROUP);
 
-    readGroupDescriptorField(vol_fd, &(globals.inodeTableLocation), sizeof(uint32_t), INODE_TABLE_LOC_HI);
-    globals.inodeTableLocation = globals.inodeTableLocation << UINT64_NIBBLE_OFFSET;
-    readGroupDescriptorField(vol_fd, &(globals.inodeTableLocation), sizeof(uint32_t), INODE_TABLE_LOC_LO);
-    globals.inodeTableLocation = globals.inodeTableLocation * (uint64_t)globals.blockSize;
+    uint32_t feat_incompat;
+    readSuperBlockField(vol_fd, &feat_incompat, sizeof(feat_incompat), FEATURE_INCOMPAT);
+    globals.is64 = (feat_incompat & IS_64_FEAT_COMPAT_MASK) == IS_64_FEAT_COMPAT_MASK;
 
 }
 
@@ -132,6 +149,7 @@ void traverseExtentTree(int vol_fd, off_t next_jump, ExtentGroup* blocks) {
         // if data process the blocks and add them to the list
         for(int i = 0; i < header.entryCount; i++){
             DataExtent extent;
+            extent.firstBlockAddress = 0;
             read(vol_fd, &(extent.firstBlockOfRange), sizeof(extent.firstBlockOfRange));
             read(vol_fd, &(extent.lengthOfRange), sizeof(extent.lengthOfRange));
             read(vol_fd, &(extent.firstBlockAddress), sizeof(uint16_t));
@@ -145,10 +163,11 @@ void traverseExtentTree(int vol_fd, off_t next_jump, ExtentGroup* blocks) {
         // if index recursively call this function with the new address
         for(int i = 1; i <= header.entryCount; i++){
             IndexExtent extent;
+            extent.nextNode = 0;
             read(vol_fd, &(extent.firstBlockOfBranch), sizeof(extent.firstBlockOfBranch));
             uint32_t nn_lo;
             read(vol_fd, &(nn_lo), sizeof(nn_lo));
-            read(vol_fd, &(extent.nextNode), sizeof(extent.nextNode));
+            read(vol_fd, &(extent.nextNode), sizeof(uint16_t));
             extent.nextNode = (extent.nextNode << UINT64_NIBBLE_OFFSET) + nn_lo;
 
             traverseExtentTree(vol_fd, extent.nextNode * (uint64_t)globals.blockSize, blocks);
@@ -162,6 +181,7 @@ void traverseExtentTree(int vol_fd, off_t next_jump, ExtentGroup* blocks) {
 Inode getInodeInfo(int vol_fd, uint32_t inode_number) {
 
     Inode inode;
+    inode.size = 0;
 
     readInodeField(vol_fd, inode_number, &(inode.file_mode), sizeof(inode.file_mode), FILE_MODE);
     readInodeField(vol_fd, inode_number, &(inode.size), sizeof(uint32_t), SIZE_HI);
@@ -170,7 +190,11 @@ Inode getInodeInfo(int vol_fd, uint32_t inode_number) {
     readInodeField(vol_fd, inode_number, &(inode.flags), sizeof(inode.flags), INODE_FLAGS);
     readInodeField(vol_fd, inode_number, &(inode.ctime), sizeof(inode.ctime), CREATION_TIME);
     inode.dataBlocks.count = 0;
-    traverseExtentTree(vol_fd, globals.inodeTableLocation + (inode_number - 1) * globals.inodeSize + EXTENT_TREE_ROOT, &(inode.dataBlocks));
+    uint64_t itl = getInodeTableLocationForGroup(vol_fd, (uint8_t)((inode_number - 1) / globals.inodesPerGroup))
+                   + ((inode_number - 1) % globals.inodesPerGroup) * globals.inodeSize + EXTENT_TREE_ROOT;
+    traverseExtentTree(vol_fd, getInodeTableLocationForGroup(vol_fd, (uint8_t)((inode_number - 1) / globals.inodesPerGroup))
+                               + ((inode_number - 1) % globals.inodesPerGroup) * globals.inodeSize + EXTENT_TREE_ROOT,
+                       &(inode.dataBlocks));
     inode.dataBlocks.lastBlockUsedSize = (uint16_t) (inode.size % (uint64_t)globals.blockSize);
 
     return inode;
@@ -306,7 +330,9 @@ void catEXT4File(int vol_fd, ExtentGroup eg) {
         for(uint16_t j = 0; j < eg.extents[i].lengthOfRange; j++){
 
             readBlock(vol_fd, eg.extents[i].firstBlockAddress, j, block);
-            if(block[0] == '\0') return;
+            if(block[0] == '\0' && i == 0 && j == 0) {
+                return;
+            }
             if(i == eg.count - 1 && j == eg.extents[i].lengthOfRange - 1){
                 write(1, block, (size_t) (sizeof(uint8_t) * eg.lastBlockUsedSize));
             } else {

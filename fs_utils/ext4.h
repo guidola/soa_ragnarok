@@ -18,6 +18,7 @@
 /** LAYOUT MAIN POSITIONS **/
 #define SUPERBLOCK_START        1024
 #define GROUP_DESCRIPTOR_START  2048 // padding + superblock_len
+#define GROUP_DESCRIPTOR_SIZE 64
 
 
 /** EXT4 SUPERBLOCK FIELDS OFFSETS IN BYTES **/
@@ -41,6 +42,8 @@
 #define FEATURE_COMPAT              0x5C
 #define FEATURE_INCOMPAT            0x60
 #define VOLUME_NAME                 0x78
+
+#define IS_64_FEAT_COMPAT_MASK      0x80
 
 /** OFFSETS ON GROUP DESCRIPTOR (GD) **/
 #define INODE_TABLE_LOC_LO          0x08
