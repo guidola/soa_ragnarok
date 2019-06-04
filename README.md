@@ -1,4 +1,4 @@
-# FileSystem 
+# FileSystem Interpreter 
 
 This project designs and implements an application which allows to recognize and manipulate volumes formatted as:
 
